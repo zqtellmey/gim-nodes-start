@@ -67,7 +67,7 @@ def run():
         try:
             print("正在打开登录页面...")
             page.goto(LOGIN_URL)
-            time.sleep(3)
+            time.sleep(5)
 
             page.screenshot(path="01_login_page.png")
             send_telegram_photo("01_login_page.png", "1. 登录页面加载完成")
