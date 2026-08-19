@@ -3,8 +3,9 @@ import time
 import requests
 from playwright.sync_api import sync_playwright
 
-# 1. 直接从环境变量读取完整 URL 与配置，无任何默认值与代码拼接
+# 1. 直接从环境变量读取 URL 与环境配置，无硬编码与拼接
 LOGIN_URL = os.environ["LOGIN_URL"]
+SERVERS_API_URL = os.environ["SERVERS_API_URL"]
 PANEL_URL = os.environ["PANEL_URL"]
 ACTION_API_URL = os.environ["ACTION_API_URL"]
 
@@ -75,35 +76,62 @@ def run():
             page.locator('//*[@id="email"]').fill(EMAIL)
             page.locator('//*[@id="password"]').fill(PASSWORD)
 
-            page.locator('//*[@id="submitBtn"]').click()
-            print("已点击登录按钮...")
+            # 3. 拦截登录后页面自动发起的 /api/servers 响应
+            print("点击登录，同时监听拦截 /api/servers 请求响应...")
+            with page.expect_response(lambda response: SERVERS_API_URL in response.url, timeout=15000) as response_info:
+                page.locator('//*[@id="submitBtn"]').click()
 
+            response = response_info.value
+            request = response.request
+
+            # 登录成功并拿到响应，等待3秒渲染
             time.sleep(3)
             page.screenshot(path="02_after_login.png")
-            send_telegram_photo("02_after_login.png", "2. 登录操作已完成，准备提取凭证")
+            send_telegram_photo("02_after_login.png", "2. 登录操作已完成，并成功拦截 API 响应")
 
-            cookies = context.cookies()
-            session_id = None
-            for cookie in cookies:
-                if cookie["name"] == "session_id":
-                    session_id = cookie["value"]
-                    break
+            # 4. 直接从被拦截的请求对象中提取 Authorization 和 Cookie 标头
+            req_headers = request.headers
+            auth_header = req_headers.get("authorization")
+            cookie_header = req_headers.get("cookie")
 
-            auth_token = page.evaluate("() => localStorage.getItem('token') || localStorage.getItem('auth_token') || sessionStorage.getItem('token')")
+            # 保底备选逻辑（若请求头未包含完整 cookie 则从上下文获取）
+            if not cookie_header:
+                cookies = context.cookies()
+                session_id = next((c["value"] for c in cookies if c["name"] == "session_id"), None)
+                if session_id:
+                    cookie_header = f"session_id={session_id}"
 
-            if not auth_token and session_id:
-                auth_token = session_id
-
-            if not session_id or not auth_token:
-                raise Exception("未能成功提取到 authorization 或 cookie session_id！")
-
-            auth_header = f"Bearer {auth_token}" if not auth_token.startswith("Bearer ") else auth_token
-            cookie_header = f"session_id={session_id}"
+            if not auth_header or not cookie_header:
+                raise Exception("未能成功拦截到 authorization 或 cookie！")
 
             msg_info = f"提取凭证成功！\nAuthorization: {auth_header[:25]}...\nCookie: {cookie_header[:25]}..."
             print(msg_info)
             send_telegram_msg(msg_info)
 
+            # 5. 直接解析该响应的 JSON，校验 status 字段
+            res_json = response.json()
+            servers_list = res_json.get("servers", [])
+
+            if not servers_list:
+                raise Exception("未找到任何服务器节点数据！")
+
+            server_info = servers_list[0]
+            server_status = server_info.get("status", "Unknown")
+            print(f"服务器当前状态: {server_status}")
+
+            # 状态不为 Offline 时中断后续 POST 操作
+            if server_status != "Offline":
+                cancel_msg = f"⚠️ 服务器当前状态为 [{server_status}]，非 Offline 状态，已自动取消启动操作！"
+                print(cancel_msg)
+
+                page.goto(PANEL_URL)
+                time.sleep(3)
+                page.screenshot(path="03_skipped_status.png")
+
+                send_telegram_photo("03_skipped_status.png", cancel_msg)
+                return
+
+            # 6. status 为 Offline 时构造精确标头并发送 Start POST 请求
             exact_headers = {
                 "accept": "*/*",
                 "accept-encoding": "gzip, deflate, br, zstd",
@@ -126,17 +154,17 @@ def run():
 
             payload = {"action": "Start"}
 
-            print("发送服务器启动 POST 请求...")
-            response = requests.post(ACTION_API_URL, headers=exact_headers, json=payload, timeout=15)
+            print("服务器为 Offline 状态，发送 Start POST 请求...")
+            post_res = requests.post(ACTION_API_URL, headers=exact_headers, json=payload, timeout=15)
 
-            res_text = response.text
+            res_text = post_res.text
             print(f"POST 响应结果: {res_text}")
 
             page.goto(PANEL_URL)
             time.sleep(3)
             page.screenshot(path="03_action_result.png")
 
-            send_telegram_photo("03_action_result.png", f"3. POST 请求完成！\n响应状态码: {response.status_code}\n响应内容: {res_text}")
+            send_telegram_photo("03_action_result.png", f"3. POST 请求完成！\n响应状态码: {post_res.status_code}\n响应内容: {res_text}")
             send_telegram_msg("✅ 自动化流程全过程成功执行完毕！")
 
         except Exception as e:
