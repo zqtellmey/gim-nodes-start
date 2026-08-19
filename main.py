@@ -85,7 +85,7 @@ def run():
             request = response.request
 
             # 登录成功并拿到响应，等待3秒渲染
-            time.sleep(3)
+            time.sleep(5)
             page.screenshot(path="02_after_login.png")
             send_telegram_photo("02_after_login.png", "2. 登录操作已完成，并成功拦截 API 响应")
 
@@ -125,7 +125,7 @@ def run():
                 print(cancel_msg)
 
                 page.goto(PANEL_URL)
-                time.sleep(3)
+                time.sleep(5)
                 page.screenshot(path="03_skipped_status.png")
 
                 send_telegram_photo("03_skipped_status.png", cancel_msg)
@@ -161,7 +161,7 @@ def run():
             print(f"POST 响应结果: {res_text}")
 
             page.goto(PANEL_URL)
-            time.sleep(3)
+            time.sleep(5)
             page.screenshot(path="03_action_result.png")
 
             send_telegram_photo("03_action_result.png", f"3. POST 请求完成！\n响应状态码: {post_res.status_code}\n响应内容: {res_text}")
