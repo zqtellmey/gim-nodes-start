@@ -2,8 +2,9 @@ import os
 import time
 import requests
 from playwright.sync_api import sync_playwright
+from playwright_stealth import stealth_sync
 
-# 1. 严格从环境变量读取配置，不硬编码任何域名
+# 1. 从环境变量读取配置
 LOGIN_URL = os.environ["LOGIN_URL"]
 SERVERS_API_URL = os.environ["SERVERS_API_URL"]
 PANEL_URL = os.environ["PANEL_URL"]
@@ -58,36 +59,69 @@ def run():
     send_telegram_msg("🚀 开始执行模拟登录及自动服务器操作流程...")
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-infobars",
+                "--window-position=0,0",
+                "--ignore-certificate-errors",
+            ]
+        )
         context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             viewport={"width": 1280, "height": 720},
             locale="zh-CN",
-            timezone_id="Asia/Shanghai"
+            timezone_id="Asia/Shanghai",
+            ignore_https_errors=True
         )
         page = context.new_page()
 
-        # 隐藏无头浏览器自动化特征，防止防爬盾返回空白页
-        page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        # 隐藏自动化特征
+        stealth_sync(page)
 
         try:
             print("正在打开登录页面...")
-            # 升级等待策略为 networkidle，确保网络加载空闲
-            page.goto(LOGIN_URL, wait_until="networkidle", timeout=30000)
+            
+            # 使用 domcontentloaded 快速加载基础 HTML 结构
+            page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=40000)
 
-            # 显式等待登录输入框真正加载渲染出来
-            page.wait_for_selector('//*[@id="email"]', timeout=15000)
+            print("页面已响应，正在等待 Load assets 进度条跑完...")
+            
+            # 1. 动态监控：等待包含 "Load assets" 或 "assets" 字样的进度条遮罩层隐去（如果有的话）
+            try:
+                # 尝试匹配带 Load assets 文本的任意元素，最长等 15 秒看它是否消失
+                page.locator("text=/load assets/i").wait_for(state="detached", timeout=15000)
+                print("检测到 Load assets 提示已消失。")
+            except Exception:
+                print("未捕捉到 Load assets 消失事件或资源加载较快，继续检查表单...")
 
+            # 2. 关键等待：等待邮箱输入框彻底处于 可见 (visible) 且 可用 (enabled) 状态
+            email_locator = page.locator('//*[@id="email"]')
+            email_locator.wait_for(state="visible", timeout=40000)
+
+            # 3. 额外留出 3 秒给前端框架（React/Vue）绑定事件
+            time.sleep(3)
+
+            print("登录页面及前端资源完全加载完成！")
             page.screenshot(path="01_login_page.png")
-            send_telegram_photo("01_login_page.png", "1. 登录页面加载完成")
+            send_telegram_photo("01_login_page.png", "1. Load assets 跑完，登录页彻底就绪")
 
-            print("正在定位元素并填写账号信息...")
-            page.locator('//*[@id="email"]').fill(EMAIL)
-            page.locator('//*[@id="password"]').fill(PASSWORD)
+            print("正在填写账号信息...")
+            email_locator.click()  # 触发 focus
+            email_locator.fill(EMAIL)
+            time.sleep(0.5)
 
-            # 3. 拦截登录后页面自动发起的 /api/servers 响应
+            pwd_locator = page.locator('//*[@id="password"]')
+            pwd_locator.click()
+            pwd_locator.fill(PASSWORD)
+            time.sleep(0.5)
+
+            # 拦截登录后页面自动发起的 /api/servers 响应
             print("点击登录，同时监听拦截 /api/servers 请求响应...")
-            with page.expect_response(lambda response: SERVERS_API_URL in response.url, timeout=15000) as response_info:
+            with page.expect_response(lambda response: SERVERS_API_URL in response.url, timeout=25000) as response_info:
                 page.locator('//*[@id="submitBtn"]').click()
 
             response = response_info.value
@@ -97,7 +131,7 @@ def run():
             page.screenshot(path="02_after_login.png")
             send_telegram_photo("02_after_login.png", "2. 登录操作已完成，并成功拦截 API 响应")
 
-            # 4. 从拦截请求中提取凭据
+            # 从拦截请求中提取凭据
             req_headers = request.headers
             auth_header = req_headers.get("authorization")
             cookie_header = req_headers.get("cookie")
@@ -115,7 +149,7 @@ def run():
             print(msg_info)
             send_telegram_msg(msg_info)
 
-            # 5. 解析响应检查 status 状态
+            # 解析响应检查 status 状态
             res_json = response.json()
             servers_list = res_json.get("servers", [])
 
@@ -137,7 +171,7 @@ def run():
                 send_telegram_photo("03_skipped_status.png", cancel_msg)
                 return
 
-            # 6. status 为 Offline 时才发送 Start 操作
+            # status 为 Offline 时才发送 Start 操作
             exact_headers = {
                 "accept": "*/*",
                 "accept-encoding": "gzip, deflate, br, zstd",
