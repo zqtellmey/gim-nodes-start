@@ -2,7 +2,6 @@ import os
 import time
 import requests
 from playwright.sync_api import sync_playwright
-from playwright_stealth import stealth_sync
 
 # 1. 从环境变量读取配置
 LOGIN_URL = os.environ["LOGIN_URL"]
@@ -59,6 +58,7 @@ def run():
     send_telegram_msg("🚀 开始执行模拟登录及自动服务器操作流程...")
 
     with sync_playwright() as p:
+        # 使用原生 Chrome 启动参数覆盖自动化特征
         browser = p.chromium.launch(
             headless=True,
             args=[
@@ -77,32 +77,36 @@ def run():
             timezone_id="Asia/Shanghai",
             ignore_https_errors=True
         )
-        page = context.new_page()
 
-        # 隐藏自动化特征
-        stealth_sync(page)
+        # 原生 JS 注入：抹除 navigator.webdriver 自动化标记，效果与 stealth 一致且不会报错
+        context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            });
+        """)
+
+        page = context.new_page()
 
         try:
             print("正在打开登录页面...")
             
-            # 使用 domcontentloaded 快速加载基础 HTML 结构
+            # 使用 domcontentloaded 加载页面
             page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=40000)
 
             print("页面已响应，正在等待 Load assets 进度条跑完...")
             
-            # 1. 动态监控：等待包含 "Load assets" 或 "assets" 字样的进度条遮罩层隐去（如果有的话）
+            # 1. 动态监控：等待包含 "Load assets" 的进度条消失
             try:
-                # 尝试匹配带 Load assets 文本的任意元素，最长等 15 秒看它是否消失
                 page.locator("text=/load assets/i").wait_for(state="detached", timeout=15000)
                 print("检测到 Load assets 提示已消失。")
             except Exception:
                 print("未捕捉到 Load assets 消失事件或资源加载较快，继续检查表单...")
 
-            # 2. 关键等待：等待邮箱输入框彻底处于 可见 (visible) 且 可用 (enabled) 状态
+            # 2. 关键等待：等待邮箱输入框彻底处于 可见 (visible) 状态
             email_locator = page.locator('//*[@id="email"]')
             email_locator.wait_for(state="visible", timeout=40000)
 
-            # 3. 额外留出 3 秒给前端框架（React/Vue）绑定事件
+            # 3. 留出 3 秒给前端框架（React/Vue）绑定事件
             time.sleep(3)
 
             print("登录页面及前端资源完全加载完成！")
@@ -110,7 +114,7 @@ def run():
             send_telegram_photo("01_login_page.png", "1. Load assets 跑完，登录页彻底就绪")
 
             print("正在填写账号信息...")
-            email_locator.click()  # 触发 focus
+            email_locator.click()
             email_locator.fill(EMAIL)
             time.sleep(0.5)
 
