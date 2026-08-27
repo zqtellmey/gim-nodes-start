@@ -25,13 +25,32 @@ PROXY_SOCKS5 = os.getenv("PROXY_SOCKS5", "").strip()
 
 
 def get_requests_proxies():
-    """获取适用于 requests 库的代理配置"""
+    """获取适用于 requests 库的代理配置 (需要包含 socks5:// 前缀)"""
     if PROXY_SOCKS5:
+        # 确保包含 socks5:// 前缀
+        proxy_url = PROXY_SOCKS5
+        if not (proxy_url.startswith("socks5://") or proxy_url.startswith("http://") or proxy_url.startswith("https://")):
+            proxy_url = f"socks5://{proxy_url}"
         return {
-            "http": PROXY_SOCKS5,
-            "https": PROXY_SOCKS5
+            "http": proxy_url,
+            "https": proxy_url
         }
     return None
+
+
+def get_playwright_proxy():
+    """获取适用于 Playwright 的代理配置 (需要剥离 socks5:// 前缀)"""
+    if not PROXY_SOCKS5:
+        return None
+    
+    # 剥离前缀，只保留 ip:port (例如 127.0.0.1:10808)
+    clean_proxy = PROXY_SOCKS5
+    for prefix in ["socks5://", "http://", "https://"]:
+        if clean_proxy.startswith(prefix):
+            clean_proxy = clean_proxy[len(prefix):]
+            break
+            
+    return {"server": f"socks5://{clean_proxy}"}
 
 
 def send_telegram_msg(text):
@@ -87,9 +106,10 @@ def run():
         }
 
         # 若环境变量配置了 SOCKS5 代理，注入到 Playwright
-        if PROXY_SOCKS5:
-            print(f"[{SITE_LABEL}] ⚙️ 检测到代理配置，正在连接 SOCKS5 代理: {PROXY_SOCKS5}")
-            launch_kwargs["proxy"] = {"server": PROXY_SOCKS5}
+        pw_proxy = get_playwright_proxy()
+        if pw_proxy:
+            print(f"[{SITE_LABEL}] ⚙️ 检测到代理配置，正在连接代理: {pw_proxy['server']}")
+            launch_kwargs["proxy"] = pw_proxy
         else:
             print(f"[{SITE_LABEL}] ℹ️ 未配置 SOCKS5 代理，将使用直连模式。")
 
@@ -218,7 +238,7 @@ def run():
                 "sec-fetch-dest": "empty",
                 "sec-fetch-mode": "cors",
                 "sec-fetch-site": "same-origin",
-                "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
+                "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (Chrome/151.0.0.0 Safari/537.36"
             }
 
             payload = {"action": "Start"}
