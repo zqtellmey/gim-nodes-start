@@ -2,8 +2,8 @@ name: Auto Task Workflow
 
 on:
   workflow_dispatch:
- # schedule:
- #   - cron: '0 */12 * * *'
+  # schedule:
+  #   - cron: '0 */12 * * *'
 
 concurrency:
   group: ${{ github.workflow }}
@@ -159,5 +159,6 @@ jobs:
           SERVERS_API_URL: ${{ secrets.SERVERS_API_URL }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          PROXY_SOCKS5: ${{ env.PROXY_SOCKS5 }}
         run: |
           python main.py
