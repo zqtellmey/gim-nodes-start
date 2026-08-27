@@ -3,7 +3,7 @@ import time
 import requests
 from playwright.sync_api import sync_playwright
 
-# 1. 从环境变量读取配置
+# 1. 从环境变量读取必要配置
 LOGIN_URL = os.environ["LOGIN_URL"]
 SERVERS_API_URL = os.environ["SERVERS_API_URL"]
 PANEL_URL = os.environ["PANEL_URL"]
@@ -20,6 +20,19 @@ TG_CHAT_ID = os.getenv("TG_CHAT_ID")
 EMAIL = os.environ["LOGIN_EMAIL"]
 PASSWORD = os.environ["LOGIN_PASSWORD"]
 
+# 3. 自动读取 SOCKS5 代理环境变量
+PROXY_SOCKS5 = os.getenv("PROXY_SOCKS5", "").strip()
+
+
+def get_requests_proxies():
+    """获取适用于 requests 库的代理配置"""
+    if PROXY_SOCKS5:
+        return {
+            "http": PROXY_SOCKS5,
+            "https": PROXY_SOCKS5
+        }
+    return None
+
 
 def send_telegram_msg(text):
     """发送文字消息到 Telegram"""
@@ -32,7 +45,7 @@ def send_telegram_msg(text):
         "text": f"[{SITE_LABEL}] {text}"
     }
     try:
-        requests.post(url, json=payload, timeout=10)
+        requests.post(url, json=payload, proxies=get_requests_proxies(), timeout=10)
     except Exception as e:
         print(f"发送Telegram消息失败: {e}")
 
@@ -49,7 +62,7 @@ def send_telegram_photo(photo_path, caption=""):
                 "chat_id": TG_CHAT_ID,
                 "caption": f"[{SITE_LABEL}] {caption}"
             }
-            requests.post(url, data=data, files=files, timeout=20)
+            requests.post(url, data=data, files=files, proxies=get_requests_proxies(), timeout=20)
     except Exception as e:
         print(f"发送Telegram图片失败: {e}")
 
@@ -58,18 +71,30 @@ def run():
     send_telegram_msg("🚀 开始执行模拟登录及自动服务器操作流程...")
 
     with sync_playwright() as p:
-        # 使用原生 Chrome 启动参数覆盖自动化特征
-        browser = p.chromium.launch(
-            headless=True,
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-infobars",
-                "--window-position=0,0",
-                "--ignore-certificate-errors",
-            ]
-        )
+        # 配置 Chromium 基础启动参数
+        launch_args = [
+            "--disable-blink-features=AutomationControlled",
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-infobars",
+            "--window-position=0,0",
+            "--ignore-certificate-errors",
+        ]
+
+        launch_kwargs = {
+            "headless": True,
+            "args": launch_args
+        }
+
+        # 若环境变量配置了 SOCKS5 代理，注入到 Playwright
+        if PROXY_SOCKS5:
+            print(f"[{SITE_LABEL}] ⚙️ 检测到代理配置，正在连接 SOCKS5 代理: {PROXY_SOCKS5}")
+            launch_kwargs["proxy"] = {"server": PROXY_SOCKS5}
+        else:
+            print(f"[{SITE_LABEL}] ℹ️ 未配置 SOCKS5 代理，将使用直连模式。")
+
+        browser = p.chromium.launch(**launch_kwargs)
+
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             viewport={"width": 1280, "height": 720},
@@ -78,7 +103,7 @@ def run():
             ignore_https_errors=True
         )
 
-        # 原生 JS 注入：抹除 navigator.webdriver 自动化标记，效果与 stealth 一致且不会报错
+        # 原生 JS 注入：抹除 navigator.webdriver 自动化标记
         context.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', {
                 get: () => undefined
@@ -199,7 +224,13 @@ def run():
             payload = {"action": "Start"}
 
             print("服务器为 Offline 状态，发送 Start POST 请求...")
-            post_res = requests.post(ACTION_API_URL, headers=exact_headers, json=payload, timeout=15)
+            post_res = requests.post(
+                ACTION_API_URL, 
+                headers=exact_headers, 
+                json=payload, 
+                proxies=get_requests_proxies(),
+                timeout=15
+            )
 
             res_text = post_res.text
             print(f"POST 响应结果: {res_text}")
