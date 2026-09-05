@@ -33,7 +33,9 @@ jobs:
 
       - name: 安装 Playwright 浏览器及系统依赖
         run: |
-          npx playwright install chromium --with-deps
+         # npx playwright install chromium --with-deps
+       
+         python -m playwright install chromium --with-deps
 
       - name: 安装并启动代理 (全自动适配内核)
         env:
